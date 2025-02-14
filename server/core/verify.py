@@ -28,6 +28,7 @@ class AgentVerify:
     def check_agent_in_agent_list(self, multi_agent_main_name, agent_list):
         multi_agent_list = self.dynamo.extract_field(agent_list, "agent_main_name")
         print(multi_agent_list)
+        print(multi_agent_main_name)
         
         if multi_agent_main_name in multi_agent_list:
             return True 
@@ -43,30 +44,30 @@ class AgentVerify:
             print('------')
             print(result)
             
-            if result is not None:
-                if self.check_agent_in_agent_list(multi_agent_main_name, result):
-                    print(f"{multi_agent_main_name} already exist.")
+            if result is not None and self.check_agent_in_agent_list(multi_agent_main_name, result):
+                print(f"{multi_agent_main_name} already exist.")
+                
+                return True   #improve here to give similarity search for already existing agents.
                     
-                    return True   #improve here to give similarity search for already existing agents.
             
-                else:
-                    date_created = self.dynamo.get_date()
-                    auto_id = self.dynamo.get_auto_increment_id('test_agent_table')
-                    item = {
-                        "id": {"N": str(auto_id)},
-                        "user_id": {"N": str(user_id)},
-                        "agent_main_name": {"S": multi_agent_main_name},
-                        "agent_list": {"S": multiple_agents_name},
-                        "date_created": {"S": date_created},
-                        "is_active": {"BOOL": True}  # Set to True by default, can be modified as needed
-                    }
-    
-                    # Add the new API key to the DynamoDB table
-                    self.dynamo.add_item(self.table_name, item)  #response can be negative handle that 
-                    # print(response.json())
-                    print(f"...New agent added succesfully {item}")
-                    
-                    return False
+            else:
+                date_created = self.dynamo.get_date()
+                auto_id = self.dynamo.get_auto_increment_id('test_agent_table')
+                item = {
+                    "id": {"N": str(auto_id)},
+                    "user_id": {"N": str(user_id)},
+                    "agent_main_name": {"S": multi_agent_main_name},
+                    "agent_list": {"S": multiple_agents_name},
+                    "date_created": {"S": date_created},
+                    "is_active": {"BOOL": True}  # Set to True by default, can be modified as needed
+                }
+
+                # Add the new API key to the DynamoDB table
+                self.dynamo.add_item(self.table_name, item)  #response can be negative handle that 
+                # print(response.json())
+                print(f"...New agent added succesfully {item}")
+                
+                return False
             
         except Exception as e:
             print(f"Error verifying agent name: {e}")
