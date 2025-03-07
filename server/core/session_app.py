@@ -8,6 +8,7 @@ from .generate_api_key import APIKeyManager
 from dotenv import load_dotenv
 import os
 from .get_agents import AgentResponseParser
+from .agent_map import AgentToolMapper
 
 load_dotenv()
 
@@ -69,23 +70,60 @@ def create_session():
         
         
         # Prepare the payload for the external API (only characterJson)
-        payload = {
-            "characterJson": character_json
-        }
-        
-        print(character_json)
-        # Make a POST request to the predefined URL
-        eliza_start_url = os.getenv("ELIZA_CREATE")
-        print(eliza_start_url)
-        
-        #
-        response = requests.post(eliza_start_url, json=payload)
+        payload = {"characterJson": character_json}
+        tools_payload = {"api_keys": api_key}
 
-        # Check if the request was successful
-        if response.status_code == 200:
-            return jsonify(response.json()), 201
+        # Get environment variables for URLs
+        eliza_start_url = os.getenv("ELIZA_CREATE")
+        tools_url = os.getenv("TOOLS_SET")
+
+        # print(f"Character JSON: {character_json}")
+        # print(f"Eliza Start URL: {eliza_start_url}")
+
+        # Validate if URLs exist
+        if not eliza_start_url or not tools_url:
+            return jsonify({"error": "Missing required environment variables"}), 500
+
+        # Make API requests
+        eliza_response = requests.post(eliza_start_url, json=payload)
+        print(f"eliza response: {eliza_response.json()}")
+        tools_response = requests.post(tools_url, json=tools_payload)
+        print(f"tools response: {tools_response.json()}")
+        
+        mapper = AgentToolMapper(dynamo, "agent_tool_id")
+
+        if eliza_response.status_code == 200:
+            agent_verify_obj.save_agent_to_db(multi_agent_main_name, api_key, multiple_agents_name)
+
+            
+        if tools_response.status_code == 200: 
+            #saving the agnet and other tools mapping in DB.
+            response = mapper.save_agent_tool_mapping(multi_agent_main_name, eliza_response, tools_response, api_key)
+            
+        
+        # Check if both requests were successful
+        if eliza_response.status_code == 200 and tools_response.status_code == 200:
+            return jsonify({
+                "eliza_response": eliza_response.json(),
+                "tools_response": tools_response.json(),
+                "multi_agent_name": multi_agent_main_name
+            }), 201
+        
+        elif eliza_response.status_code != 200 or tools_response!= 200:
+            return jsonify({
+                "error": f"Either of agents failed to create among {multiple_agents_name}",
+                "eliza_details": eliza_response.text if eliza_response.status_code != 200 else None,
+                "tools_details": tools_response.text if tools_response.status_code != 200 else None
+            }), 400  # Changed to 400 (Bad Request) since it's an external failure
+
+            
         else:
-            return jsonify({"error": "Failed to create session on external server.", "details": response.text}), response.status_code
+            return jsonify({
+                "error": "Failed to create session on external server.",
+                "eliza_details": eliza_response.text if eliza_response.status_code != 200 else None,
+                "tools_details": tools_response.text if tools_response.status_code != 200 else None
+            }), 400  # Changed to 400 (Bad Request) since it's an external failure
+
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -123,7 +161,14 @@ def process_query():
         # Get data from request
         data = request.json
         query = data.get("query")
-        agent_id = data.get("agent_id")
+        agent_name = data.get("agent_name")
+        
+        primary_key = {"multi_agent_main_name": {"S": agent_name}}
+        response = dynamo.get_item("agent_tool_id", primary_key)
+        # response = {'agent_id': {'S': '3fb55a72-6b74-0fbe-b3ae-5d6de38b3616'}, 'multi_agent_main_name': {'S': 'demo4'}, 'tools_agent_id': {'S': 'd5900b5b-8468-46ec-a226-40b6e5a51e71'}}
+        
+        agent_id = response['agent_id']['S']
+        print(f"agent name:{agent_name}, agent id : {agent_id}")
 
         # Validate required fields
         if not all([query, agent_id]):
@@ -134,10 +179,11 @@ def process_query():
 
 
         # Get both target API URLs from environment variables
-        target_api_url_1 = os.getenv("QUERY_API_URL_1")
-        target_api_url_2 = os.getenv("QUERY_API_URL_2")
+        target_api_url_1 = os.getenv("ELIZA_QUERY") #eliza
+        target_api_url_1 = target_api_url_1 + agent_id + '/message'    
+        print("target_api_url1", target_api_url_1)
         
-        if not all([target_api_url_1, target_api_url_2]):
+        if not all([target_api_url_1]):
             return jsonify({
                 "status": "error",
                 "message": "Target API URLs not properly configured"
@@ -145,8 +191,8 @@ def process_query():
 
         # Prepare request payload - only sending query and agent_id
         payload = {
-            "query": query,
-            "agent_id": agent_id
+            "text": query,
+            "user": "user"
         }
         headers = {
             "Content-Type": "application/json"
@@ -169,21 +215,6 @@ def process_query():
                         "source": "api_1"
                     }), 200
 
-            # If first API returns None or fails, try second API
-            response2 = requests.post(
-                target_api_url_2,
-                json=payload,
-                headers=headers
-            )
-            
-            if response2.status_code == 200:
-                response_data = response2.json()
-                if response_data is not None:
-                    return jsonify({
-                        "status": "success",
-                        "data": response_data,
-                        "source": "api_2"
-                    }), 200
 
             # If both APIs return None or fail
             return jsonify({

@@ -49,26 +49,34 @@ class AgentVerify:
                 
                 return True   #improve here to give similarity search for already existing agents.
                     
-            
-            else:
-                date_created = self.dynamo.get_date()
-                auto_id = self.dynamo.get_auto_increment_id('test_agent_table')
-                item = {
-                    "id": {"N": str(auto_id)},
-                    "user_id": {"N": str(user_id)},
-                    "agent_main_name": {"S": multi_agent_main_name},
-                    "agent_list": {"S": multiple_agents_name},
-                    "date_created": {"S": date_created},
-                    "is_active": {"BOOL": True}  # Set to True by default, can be modified as needed
-                }
-
-                # Add the new API key to the DynamoDB table
-                self.dynamo.add_item(self.table_name, item)  #response can be negative handle that 
-                # print(response.json())
-                print(f"...New agent added succesfully {item}")
-                
+            else: 
                 return False
             
         except Exception as e:
             print(f"Error verifying agent name: {e}")
+        return False, None
+            
+            
+    def save_agent_to_db(self, multi_agent_main_name, api_key, multiple_agents_name):
+        try:
+            user_id = self.dynamo.get_userId_from_APIkey(os.getenv("API_TABLE"), api_key)
+            date_created = self.dynamo.get_date()
+            auto_id = self.dynamo.get_auto_increment_id('test_agent_table')
+            item = {
+                "id": {"N": str(auto_id)},
+                "user_id": {"N": str(user_id)},
+                "agent_main_name": {"S": multi_agent_main_name},
+                "agent_list": {"S": multiple_agents_name},
+                "date_created": {"S": date_created},
+                "is_active": {"BOOL": True}  # Set to True by default, can be modified as needed
+            }
+    
+            # Add the new API key to the DynamoDB table
+            self.dynamo.add_item(self.table_name, item)  #response can be negative handle that 
+            # print(response.json())
+            print(f"...New agent added succesfully {item}")
+            
+    
+        except Exception as e:
+            print(f"Error saving agent to the DB: {e}")
         return False, None
