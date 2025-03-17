@@ -13,8 +13,8 @@ class AgentToolMapper:
 
             item = {
                 "multi_agent_main_name" : {"S": str(multi_agent_main_name)},
-                "agent_id": {"S": str(eliza_agent_id)},
-                "tools_agent_id": {"S": str(tools_agent_id)}
+                "eliza_agent_id": {"S": str(eliza_agent_id)},
+                "extra_tools_agent_id": {"S": str(tools_agent_id)}
             }
 
             self.dynamo.add_item(self.table_name, item)
