@@ -10,6 +10,7 @@ import os
 from .get_agents import AgentResponseParser
 from .agent_map import AgentToolMapper
 from .memory import retrieve_relevant
+from .router import AgentRouter
 load_dotenv()
 
 
@@ -59,18 +60,18 @@ def create_session():
             return jsonify({"error": "characterJson and api_key are required."}), 400
 
         # Verify the API key
-        # verify_obj = ApiVerify(dynamo, os.getenv("API_TABLE"))
-        # if not verify_obj.verify(api_key):
-        #     return jsonify({"error": "Invalid API key."}), 403
+        verify_obj = ApiVerify(dynamo, os.getenv("API_TABLE"))
+        if not verify_obj.verify(api_key):
+            return jsonify({"error": "Invalid API key."}), 403
         
-        # print("--------- API Key verified ---------")
+        print("--------- API Key verified ---------")
 
         
         agent_verify_obj = AgentVerify(dynamo, os.getenv("AGENT_TABLE"))
         agent_exist = agent_verify_obj.verify_agent_name(multi_agent_main_name, api_key, multiple_agents_name)
         print("### ", agent_exist)
-        # if agent_exist:
-        #     return jsonify({"error": f"Multi-agent with name {multi_agent_main_name} already exists. Please check your dashboard for the respective agent-id"}), 403
+        if agent_exist:
+            return jsonify({"error": f"Multi-agent with name {multi_agent_main_name} already exists. Please check your dashboard for the respective agent-id"}), 403
         
         
         # Prepare the payload for the external API (only characterJson)
@@ -81,8 +82,8 @@ def create_session():
         eliza_start_url = os.getenv("ELIZA_CREATE")
         tools_url = os.getenv("TOOLS_SET")
 
-        # print(f"Character JSON: {character_json}")
-        # print(f"Eliza Start URL: {eliza_start_url}")
+        print(f"Character JSON: {character_json}")
+        print(f"Eliza Start URL: {eliza_start_url}")
 
         # Validate if URLs exist
         if not eliza_start_url or not tools_url:
@@ -184,101 +185,81 @@ def process_query():
 
 
         # Get both target API URLs from environment variables
-        target_api_url_1 = os.getenv("ELIZA_QUERY") #eliza
-        target_api_url_1 = target_api_url_1 + agent_id + '/message'    
-        print("target_api_url1", target_api_url_1)
-        tool_api_url = os.getenv("TOOLS_QUERY") #tools
-        if not all([target_api_url_1]):
+        eliza_start_url = os.getenv("ELIZA_QUERY") #eliza
+        tools_url = os.getenv("TOOLS_QUERY") + agent_id + '/message'    #tools
+        print("Eliza start url", eliza_start_url)
+        print("Tools start url", tools_url)
+
+        #tools
+        tools_url = os.getenv("TOOLS_QUERY") 
+        if not all([tools_url]):
             return jsonify({
                 "status": "error",
                 "message": "Target API URLs not properly configured"
             }), 500
 
         # get history
-        his_lis=dynamo.get_history("agent_tool_id", primary_key)
-        print("History list", his_lis)
-        rel= retrieve_relevant(query,his_lis)
-        pro="please answer current user query and take help from past interaction if required.\ncurrent query from user : "+query+"\nPAST INTERACTIONS:\n"+rel
+        chat_history = dynamo.get_history("agent_tool_id", primary_key)
+        print("History list", chat_history)
+        relevant_history = retrieve_relevant(query, chat_history)
+        prompt="please answer current user query and take help from past interaction if required.\ncurrent query from user : "+query+"\nPAST INTERACTIONS:\n"+relevant_history
 
         payload = {
-            "text": pro,
+            "text": prompt,
             "user": "user"
         }
         payload2={
             "unique_id":extra_tool_key,
-            "query":pro
+            "query":prompt
         }
         headers = {
             "Content-Type": "application/json"
         }
    
-        
+        router = AgentRouter(eliza_start_url, tools_url)
+        address = router.route_query(query)
 
-        # Try first API
-        try:
-            response1 = requests.post(
-                target_api_url_1,
+        if address == "eliza":
+            response = requests.post(
+                eliza_start_url,
                 json=payload,
                 headers=headers
             )
-            response2=requests.post(
-                tool_api_url,
-                json=payload2,
+        else:
+            response = requests.post(
+                tools_url,
+                json=payload,
                 headers=headers
             )
+           
             
-            if response1.status_code == 200:
+            if response.status_code == 200:
                 try:
-                    response_data = response1.json()
+                    response_data = response.json()
                 except:
                     response_data = None
-            if response2.status_code == 200:
-                try:
-                    response_data2 = response2.json()
-                except:
-                    response_data2 = None
 
             
-            sav=f"User: {query}\nAI: "+str(response_data[0]["text"])+"\n"+str(response_data2["result"])
-            his_lis.append(sav)
-            if len(his_lis)>20:
-                his_lis.pop(0)
+            sav=f"User: {query}\nAI: "+str(response_data[0]["text"])+"\n"+str(response_data["result"])
+            chat_history.append(sav)
+            if len(chat_history)>20:
+                chat_history.pop(0)
 
-            dynamo.update_history("agent_tool_id", primary_key, his_lis)
+            dynamo.update_history("agent_tool_id", primary_key, chat_history)
 
 
             return jsonify({
                 "status": "success",
                 "data1": response_data,
-                "extra_tool_response":response_data2
+                "extra_tool_response":response_data
             }), 200
-
-
-            # If both APIs return None or fail
-            # return jsonify({
-            #     "status": "error",
-            #     "message": "No response from either API"
-            # }), 404
-
-        except requests.RequestException as e:
-            return jsonify({
-                "status": "error",
-                "message": f"Failed to process query: {str(e)}"
-            }), 500
-        
-        
 
 
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": f"Server error: {str(e)}"
+            "message": f"Failed to analyze query: {str(e)}"
         }), 500
-
-    
-
-
-    
 
     
 
