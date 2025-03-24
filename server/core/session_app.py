@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import os
 from .get_agents import AgentResponseParser
 from .agent_map import AgentToolMapper
-
+from .memory import retrieve_relevant
 load_dotenv()
 
 
@@ -41,6 +41,10 @@ def create_session():
         # Parse the incoming JSON data
         data = request.json
         print(data.get("character_file"))
+        print(data.get("api_key"))
+        print(data.get("env_json"))
+        print(data.get("multi_agent_main_name"))
+        print(data.get("multiple_agents_name"))
         
 
         # Extract characterJson and api_key from the payload
@@ -55,18 +59,18 @@ def create_session():
             return jsonify({"error": "characterJson and api_key are required."}), 400
 
         # Verify the API key
-        verify_obj = ApiVerify(dynamo, os.getenv("API_TABLE"))
-        if not verify_obj.verify(api_key):
-            return jsonify({"error": "Invalid API key."}), 403
+        # verify_obj = ApiVerify(dynamo, os.getenv("API_TABLE"))
+        # if not verify_obj.verify(api_key):
+        #     return jsonify({"error": "Invalid API key."}), 403
         
-        print("--------- API Key verified ---------")
+        # print("--------- API Key verified ---------")
 
         
         agent_verify_obj = AgentVerify(dynamo, os.getenv("AGENT_TABLE"))
         agent_exist = agent_verify_obj.verify_agent_name(multi_agent_main_name, api_key, multiple_agents_name)
         print("### ", agent_exist)
-        if agent_exist:
-            return jsonify({"error": f"Multi-agent with name {multi_agent_main_name} already exists. Please check your dashboard for the respective agent-id"}), 403
+        # if agent_exist:
+        #     return jsonify({"error": f"Multi-agent with name {multi_agent_main_name} already exists. Please check your dashboard for the respective agent-id"}), 403
         
         
         # Prepare the payload for the external API (only characterJson)
@@ -162,6 +166,7 @@ def process_query():
         data = request.json
         query = data.get("query")
         agent_name = data.get("agent_name")
+        extra_tool_key=data.get("extra_tool_key")
         
         primary_key = {"multi_agent_main_name": {"S": agent_name}}
         response = dynamo.get_item("agent_tool_id", primary_key)
@@ -182,21 +187,32 @@ def process_query():
         target_api_url_1 = os.getenv("ELIZA_QUERY") #eliza
         target_api_url_1 = target_api_url_1 + agent_id + '/message'    
         print("target_api_url1", target_api_url_1)
-        
+        tool_api_url = os.getenv("TOOLS_QUERY") #tools
         if not all([target_api_url_1]):
             return jsonify({
                 "status": "error",
                 "message": "Target API URLs not properly configured"
             }), 500
 
-        # Prepare request payload - only sending query and agent_id
+        # get history
+        his_lis=dynamo.get_history("agent_tool_id", primary_key)
+        print("History list", his_lis)
+        rel= retrieve_relevant(query,his_lis)
+        pro="please answer current user query and take help from past interaction if required.\ncurrent query from user : "+query+"\nPAST INTERACTIONS:\n"+rel
+
         payload = {
-            "text": query,
+            "text": pro,
             "user": "user"
+        }
+        payload2={
+            "unique_id":extra_tool_key,
+            "query":pro
         }
         headers = {
             "Content-Type": "application/json"
         }
+   
+        
 
         # Try first API
         try:
@@ -205,28 +221,53 @@ def process_query():
                 json=payload,
                 headers=headers
             )
+            response2=requests.post(
+                tool_api_url,
+                json=payload2,
+                headers=headers
+            )
             
             if response1.status_code == 200:
-                response_data = response1.json()
-                if response_data is not None:
-                    return jsonify({
-                        "status": "success",
-                        "data": response_data,
-                        "source": "api_1"
-                    }), 200
+                try:
+                    response_data = response1.json()
+                except:
+                    response_data = None
+            if response2.status_code == 200:
+                try:
+                    response_data2 = response2.json()
+                except:
+                    response_data2 = None
+
+            
+            sav=f"User: {query}\nAI: "+str(response_data[0]["text"])+"\n"+str(response_data2["result"])
+            his_lis.append(sav)
+            if len(his_lis)>20:
+                his_lis.pop(0)
+
+            dynamo.update_history("agent_tool_id", primary_key, his_lis)
+
+
+            return jsonify({
+                "status": "success",
+                "data1": response_data,
+                "extra_tool_response":response_data2
+            }), 200
 
 
             # If both APIs return None or fail
-            return jsonify({
-                "status": "error",
-                "message": "No response from either API"
-            }), 404
+            # return jsonify({
+            #     "status": "error",
+            #     "message": "No response from either API"
+            # }), 404
 
         except requests.RequestException as e:
             return jsonify({
                 "status": "error",
                 "message": f"Failed to process query: {str(e)}"
             }), 500
+        
+        
+
 
     except Exception as e:
         return jsonify({

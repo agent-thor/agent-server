@@ -223,7 +223,39 @@ class DynamoDBClient:
                     extracted_values.append(value_dict["BOOL"])
         
         return extracted_values
+ 
+    def get_history(self, table_name: str, primary_key: Dict[str, Dict[str, str]], 
+                 attributes: Optional[List[str]] = None) -> List[str]:
+        """Retrieve 'history' column. If not found, create it and return an empty list."""
+        try:
+            params = {'TableName': table_name, 'Key': primary_key}
+            if attributes:
+                params['AttributesToGet'] = attributes
+    
+            response = self.client.get_item(**params)
+            item = response.get('Item', {})
 
+            # Check if 'history' exists, if not, create it
+            if 'history' not in item:
+                self.update_history(table_name, primary_key, [])
+                return []
+            
+            return item['history'].get('L', [])  # 'L' is the DynamoDB List type
+
+        except ClientError as e:
+            raise Exception(f"Failed to get item: {str(e)}")
+
+    def update_history(self, table_name: str, primary_key: Dict[str, Dict[str, str]], history: List[str]):
+        """Create or update the 'history' column with an empty list if it doesn't exist."""
+        try:
+            self.client.update_item(
+                TableName=table_name,
+                Key=primary_key,
+                UpdateExpression="SET history = :h",
+                ExpressionAttributeValues={":h": {"L": [{"S": val} for val in history]}},
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to update item: {str(e)}")
     
         
 
